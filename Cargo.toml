@@ -1,0 +1,33 @@
+[package]
+name = "plonky2_ed25519"
+description = "Plonky2 implementation of Ed25519"
+authors = ["Utsav Jain <utsav@atomlabs.one>"]
+keywords = ["snark", "plonky2", "Ed25519"]
+categories = ["cryptography"]
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+plonky2 = "0.1.4"
+plonky2_crypto = {git = "https://github.com/Electron-Labs/plonky2-crypto"}
+plonky2_sha512 = {git = "https://github.com/Electron-Labs/plonky2_sha512"}
+curve25519-dalek = { git = "https://github.com/Electron-Labs/curve25519-dalek"}
+itertools = { version = "0.10.0", default-features = false, features = ["use_alloc"] }
+num = { version = "0.4", default-features = false, features = ["alloc", "rand"] }
+serde = { version = "1.0", default-features = false, features = ["alloc", "derive"] }
+anyhow = "1.0.40"
+rand = "0.8.5"
+sha2 = "0.10"
+
+[profile.release]
+opt-level = 3
+#lto = "fat"
+#codegen-units = 1
+
+[profile.bench]
+opt-level = 3
+
+[profile.test]
+opt-level = 0
