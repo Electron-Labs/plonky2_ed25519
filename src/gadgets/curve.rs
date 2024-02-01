@@ -10,6 +10,7 @@ use plonky2::plonk::circuit_builder::CircuitBuilder;
 use plonky2_crypto::biguint::{GeneratedValuesBigUint, BigUintTarget};
 use plonky2::field::extension::Extendable;
 use plonky2::field::types::{Field, PrimeField, Sample};
+use plonky2::util::serialization::{Read, Write};
 use plonky2_crypto::u32::gadgets::arithmetic_u32::{CircuitBuilderU32, U32Target};
 
 use crate::curve::curve_types::{AffinePoint, Curve, CurveScalar};
@@ -23,7 +24,7 @@ const WINDOW_SIZE: usize = 4;
 
 /// A Target representing an affine point on the curve `C`. We use incomplete arithmetic for efficiency,
 /// so we assume these points are not zero.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct AffinePointTarget<C: Curve> {
     pub x: NonNativeTarget<C::BaseField>,
     pub y: NonNativeTarget<C::BaseField>,
@@ -32,6 +33,25 @@ pub struct AffinePointTarget<C: Curve> {
 impl<C: Curve> AffinePointTarget<C> {
     pub fn to_vec(&self) -> Vec<NonNativeTarget<C::BaseField>> {
         vec![self.x.clone(), self.y.clone()]
+    }
+
+    pub fn serialize(&self, dst: &mut Vec<u8>) -> plonky2::util::serialization::IoResult<()> {
+        self.x.value.serialize(dst)?;
+        self.y.value.serialize(dst)
+    }
+
+    pub fn deserialize(src: &mut plonky2::util::serialization::Buffer) -> plonky2::util::serialization::IoResult<Self> {
+        let x_biguint_target = BigUintTarget::deserialize(src)?;
+        let x = NonNativeTarget::<C::BaseField> {
+            value: x_biguint_target,
+            _phantom: PhantomData,
+        };
+        let y_biguint_target = BigUintTarget::deserialize(src)?;
+        let y = NonNativeTarget::<C::BaseField> {
+            value: y_biguint_target,
+            _phantom: PhantomData,
+        };
+        Ok(Self {x, y})
     }
 }
 
@@ -455,8 +475,8 @@ impl<F: RichField + Extendable<D>, const D: usize> CircuitBuilderCurve<F, D>
 
 
 // Generator logic well explained in: https://polymerlabs.medium.com/a-tutorial-on-writing-proofs-with-plonky2-part-ii-23f7a93ebabc
-#[derive(Debug)]
-struct CurvePointDecompressionGenerator<F: RichField + Extendable<D>, const D: usize, C: Curve> {
+#[derive(Debug, Default)]
+pub struct CurvePointDecompressionGenerator<F: RichField + Extendable<D>, const D: usize, C: Curve> {
     compressed: Vec<BoolTarget>,
     new_point: AffinePointTarget<C>,
     _phantom: PhantomData<F>,
@@ -490,17 +510,24 @@ impl<F: RichField + Extendable<D>, const D: usize, C: Curve> SimpleGenerator<F, 
     }
 
     fn id(&self) -> String {
-        todo!()
+        "CurvePointDecompressionGenerator".to_string()
     }
 
-    fn serialize(&self, _dst: &mut Vec<u8>, _common_data: &plonky2::plonk::circuit_data::CommonCircuitData<F, D>) -> plonky2::util::serialization::IoResult<()> {
-        todo!()
+    fn serialize(&self, dst: &mut Vec<u8>, _common_data: &plonky2::plonk::circuit_data::CommonCircuitData<F, D>) -> plonky2::util::serialization::IoResult<()> {
+        dst.write_target_bool_vec(&self.compressed)?;
+        self.new_point.serialize(dst)
     }
 
-    fn deserialize(_src: &mut plonky2::util::serialization::Buffer, _common_data: &plonky2::plonk::circuit_data::CommonCircuitData<F, D>) -> plonky2::util::serialization::IoResult<Self>
+    fn deserialize(src: &mut plonky2::util::serialization::Buffer, _common_data: &plonky2::plonk::circuit_data::CommonCircuitData<F, D>) -> plonky2::util::serialization::IoResult<Self>
     where
         Self: Sized {
-        todo!()
+        let compressed_bool_target = src.read_target_bool_vec()?;
+        let new_point = AffinePointTarget::deserialize(src)?;
+        Ok(Self {
+            compressed: compressed_bool_target,
+            new_point: new_point,
+            _phantom: PhantomData,
+        })
     }
 }
 
