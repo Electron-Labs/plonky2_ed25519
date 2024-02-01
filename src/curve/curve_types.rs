@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 pub struct CurveScalar<C: Curve>(pub <C as Curve>::ScalarField);
 
 /// A Twisted Edwards Curve.
-pub trait Curve: 'static + Sync + Sized + Copy + Debug {
+pub trait Curve: 'static + Sync + Sized + Copy + Debug + Default {
     type BaseField: PrimeField;
     type ScalarField: PrimeField;
 

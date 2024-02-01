@@ -4,7 +4,7 @@ use crate::field::ed25519_base::Ed25519Base;
 use crate::field::ed25519_scalar::Ed25519Scalar;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Copy, Clone, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[derive(Debug, Copy, Clone, Deserialize, Eq, Hash, PartialEq, Serialize, Default)]
 pub struct Ed25519;
 
 impl Curve for Ed25519 {
