@@ -1,29 +1,37 @@
 #![allow(incomplete_features)]
 #![feature(generic_const_exprs)]
 
+use std::fs;
+use std::marker::PhantomData;
 use anyhow::Result;
 use std::time::Instant;
 use plonky2::hash::hash_types::RichField;
 use plonky2::iop::witness::{PartialWitness, Witness, WitnessWrite};
 use plonky2::plonk::circuit_builder::CircuitBuilder;
-use plonky2::plonk::circuit_data::{
-    CircuitConfig, CommonCircuitData, VerifierOnlyCircuitData,
-};
-use plonky2::plonk::config::{GenericConfig, Hasher, PoseidonGoldilocksConfig};
+use plonky2::plonk::circuit_data::{CircuitConfig, CircuitData, CommonCircuitData, ProverOnlyCircuitData, VerifierOnlyCircuitData};
+use plonky2::plonk::config::{AlgebraicHasher, GenericConfig, Hasher, PoseidonGoldilocksConfig};
 use plonky2::plonk::proof::ProofWithPublicInputs;
 use plonky2_ed25519::curve::eddsa::{
-    SAMPLE_MSG1, SAMPLE_PK1, SAMPLE_SIG1, 
+    SAMPLE_MSG1, SAMPLE_PK1, SAMPLE_SIG1,
 };
 use plonky2_ed25519::gadgets::eddsa::{fill_circuits, make_verify_circuits, verify_using_preprocessed_sha_block};
 use plonky2::field::extension::Extendable;
 use plonky2::iop::target::BoolTarget;
 use plonky2_sha512::gadgets::sha512::array_to_bits;
+use plonky2::plonk::prover::prove;
+use serde::{Deserialize, Serialize};
+use plonky2_ed25519::serialization::{Ed25519GateSerializer, Ed25519GeneratorSerializer};
 
 type ProofTuple<F, C, const D: usize> = (
     ProofWithPublicInputs<F, C, D>,
     VerifierOnlyCircuitData<C, D>,
     CommonCircuitData<F, D>,
 );
+
+#[derive(Serialize, Deserialize)]
+struct Data {
+    bytes: Vec<u8>
+}
 
 fn prove_ed25519_from_sha512_block<F: RichField + Extendable<D>, C: GenericConfig<D, F = F>, const D: usize>(
     sha_preprocessed: &Vec<u8>,
@@ -73,30 +81,82 @@ fn prove_ed25519_from_sha512_block<F: RichField + Extendable<D>, C: GenericConfi
     data.verify(proof.clone()).expect("verify error");
 }
 
-fn prove_ed25519<F: RichField + Extendable<D>, C: GenericConfig<D, F = F>, const D: usize>(
+fn dump_bytes_to_json(bytes: Vec<u8>, json_path: &str) {
+    // Serialize Vec<u8> to json
+    let serialized_data = serde_json::to_string(&Data { bytes: bytes.clone() })
+        .expect("Failed to serialize data");
+    // Write json to file
+    fs::write(json_path, serialized_data).expect("Failed to write to file");
+}
+
+fn read_bytes_from_json(json_path: &str) -> Vec<u8> {
+    // Read json data
+    let json_data = fs::read_to_string(json_path).expect("Failed to read from file");
+    // Deserialize json back to Vec<u8>
+    let deserialized_data: Data = serde_json::from_str(&json_data).expect("Failed to deserialize data");
+    deserialized_data.bytes
+}
+
+fn build_circuit<F: RichField + Extendable<D>, C: GenericConfig<D, F=F> + 'static, const D: usize>(
+    msg_len: usize,
+    storage_dir: &str
+)
+where
+    [(); C::Hasher::HASH_SIZE]:, <C as GenericConfig<D>>::Hasher: AlgebraicHasher<F>,
+{
+    let mut builder = CircuitBuilder::<F, D>::new(CircuitConfig::wide_ecc_config());
+    let _targets = make_verify_circuits(&mut builder, msg_len);
+    println!("Building circuit with {:?} gates", builder.num_gates());
+    let t = Instant::now();
+    let data = builder.build::<C>();
+    println!("Time taken to build the circuit : {:?}", t.elapsed());
+    let cd_bytes = data.common.clone().to_bytes(&Ed25519GateSerializer).unwrap();
+    dump_bytes_to_json(cd_bytes, format!("{storage_dir}/common_data.json").as_str());
+    let prover_only_bytes = data.prover_only.to_bytes(&Ed25519GeneratorSerializer::<C, D> {_phantom: PhantomData::<C>}, &data.common).unwrap();
+    dump_bytes_to_json(prover_only_bytes, format!("{storage_dir}/prover_only.json").as_str());
+    let verifier_only_bytes = data.verifier_only.to_bytes().unwrap();
+    dump_bytes_to_json(verifier_only_bytes, format!("{storage_dir}/verifier_only.json").as_str());
+}
+
+fn generate_proof<F: RichField + Extendable<D>, C: GenericConfig<D, F=F> + 'static, const D: usize>(
     msg: &[u8],
     sigv: &[u8],
     pkv: &[u8],
-) -> Result<ProofTuple<F, C, D>>
+    storage_dir: &str
+)
 where
-    [(); C::Hasher::HASH_SIZE]:,
+    [(); C::Hasher::HASH_SIZE]:, <C as GenericConfig<D>>::Hasher: AlgebraicHasher<F>,
 {
-    let mut builder = CircuitBuilder::<F, D>::new(CircuitConfig::wide_ecc_config());
+    let cd_bytes = read_bytes_from_json(format!("{storage_dir}/common_data.json").as_str());
+    let prover_only_bytes = read_bytes_from_json(format!("{storage_dir}/prover_only.json").as_str());
+    let verifier_only_bytes = read_bytes_from_json(format!("{storage_dir}/verifier_only.json").as_str());
 
+    let common_data = CommonCircuitData::<F, D>::from_bytes(cd_bytes, &Ed25519GateSerializer).unwrap();
+    let prover_only = ProverOnlyCircuitData::<F, C, D>::from_bytes(
+        prover_only_bytes.as_slice(),
+        &Ed25519GeneratorSerializer::<C, D> {_phantom: PhantomData::<C>},
+        &common_data
+    ).unwrap();
+    let verifier_only = VerifierOnlyCircuitData::<C, D>::from_bytes(verifier_only_bytes).unwrap();
+
+    let mut builder = CircuitBuilder::<F, D>::new(CircuitConfig::wide_ecc_config());
     let targets = make_verify_circuits(&mut builder, msg.len());
+    println!("Starting proof generation");
     let mut pw = PartialWitness::new();
     fill_circuits::<F, D>(&mut pw, msg, sigv, pkv, &targets);
-    println!("Building ed25519 circuit with {:?} gates", builder.num_gates());
-    let s0 = Instant::now();
-    let data = builder.build::<C>();
-    println!("Time taken to build the circuit : {:?}", s0.elapsed());
-    let s1 = Instant::now();
-    let proof = data.prove(pw).unwrap();
-    println!("Time taken to generate the proof : {:?}", s1.elapsed());
-    let s2 = Instant::now();
-    data.verify(proof.clone()).expect("verify error");
-    println!("Time taken to verify the proof : {:?}", s2.elapsed());
-    Ok((proof, data.verifier_only, data.common))
+    let t = Instant::now();
+    let proof_with_pis = prove::<F, C, D>(&prover_only, &common_data, pw, &mut Default::default()).unwrap();
+    println!("Time taken to generate proof {:?}", t.elapsed());
+
+    let proof_with_pis_bytes = proof_with_pis.to_bytes();
+    dump_bytes_to_json(proof_with_pis_bytes, format!("{storage_dir}/proof_with_pis.json").as_str());
+
+    let data = CircuitData::<F, C, D> {
+        prover_only,
+        verifier_only,
+        common: common_data,
+    };
+    data.verify(proof_with_pis).expect("verify error");
 }
 
 
@@ -104,12 +164,11 @@ fn benchmark() -> Result<()> {
     const D: usize = 2;
     type C = PoseidonGoldilocksConfig;
     type F = <C as GenericConfig<D>>::F;
-    prove_ed25519::<F,C,D>(
-        SAMPLE_MSG1.as_bytes(),
-        SAMPLE_SIG1.as_slice(),
-        SAMPLE_PK1.as_slice(),
-    )
-    .expect("prove error 1");
+    let msg = SAMPLE_MSG1.as_bytes();
+    let sig = SAMPLE_SIG1.as_slice();
+    let pk = SAMPLE_PK1.as_slice();
+    build_circuit::<F, C, D>(msg.len(), ".");
+    generate_proof::<F, C, D>(&msg, &sig, &pk, ".");
     Ok(())
 }
 
