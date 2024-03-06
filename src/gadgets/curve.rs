@@ -1,5 +1,6 @@
 //modified from:= https://github.com/mir-protocol/plonky2-ecdsa/blob/main/src/gadgets/curve.rs
 use std::marker::PhantomData;
+use std::str::FromStr;
 
 use num::BigUint;
 use plonky2::hash::hash_types::RichField;
@@ -371,27 +372,42 @@ impl<F: RichField + Extendable<D>, const D: usize> CircuitBuilderCurve<F, D>
     }
 
     fn precompute_wnaf_window<C: Curve>(&mut self, p: &AffinePointTarget<C>) -> Vec<AffinePointTarget<C>> {
-        let rando = (CurveScalar(C::ScalarField::rand()) * C::GENERATOR_PROJECTIVE).to_affine();
-        let rando_target = self.constant_affine_point(rando.clone());
-        let rando_neg_target = self.curve_neg(&rando_target);
-        let mut precompute =  vec![rando_target];
+        let big_one = <C as Curve>::ScalarField::from_noncanonical_biguint(
+            BigUint::from_str(
+                "1",
+            )
+            .unwrap(),
+        );
+        let init = (CurveScalar(big_one) * C::GENERATOR_PROJECTIVE).to_affine();
+        let init_target = self.constant_affine_point(init.clone());
+        let init_neg_target = self.curve_neg(&init_target);
+        let mut precompute =  vec![init_target];
         for i in 1..1<<WINDOW_SIZE {
             precompute.push(self.curve_add(&precompute[i-1], p));
         }
         for i in 1..1<<WINDOW_SIZE {
-            precompute[i] = self.curve_add(&precompute[i], &rando_neg_target);
+            precompute[i] = self.curve_add(&precompute[i], &init_neg_target);
         }
         precompute
     }
 
-    fn curve_scalar_mul_windowed<C: Curve>(&mut self, p: &AffinePointTarget<C>, n: &NonNativeTarget<C::ScalarField>) -> AffinePointTarget<C> {
-        let num_limbs = C::ScalarField::BITS/4;
+    fn curve_scalar_mul_windowed<C: Curve>(&mut self,
+        p: &AffinePointTarget<C>,
+        n: &NonNativeTarget<C::ScalarField>,
+    ) -> AffinePointTarget<C> {
+        let num_limbs = C::ScalarField::BITS / 4;
         let windows = &self.split_nonnative_to_4_bit_limbs(&n)[0..num_limbs];
-        let rando = (CurveScalar(C::ScalarField::rand()) * C::GENERATOR_PROJECTIVE).to_affine();
+        let big_one = <C as Curve>::ScalarField::from_noncanonical_biguint(
+            BigUint::from_str(
+                "1",
+            )
+            .unwrap(),
+        );
+        let init = (CurveScalar(big_one) * C::GENERATOR_PROJECTIVE).to_affine();
 
-        let randot_multiplied = {
-            let mut cur = rando;
-            for _ in 0..(num_limbs*4) {
+        let init_multiplied = {
+            let mut cur = init;
+            for _ in 0..(num_limbs * 4) {
                 cur = cur.double();
             }
             cur
@@ -399,7 +415,7 @@ impl<F: RichField + Extendable<D>, const D: usize> CircuitBuilderCurve<F, D>
 
         let precompute = self.precompute_wnaf_window(p);
 
-        let mut result = self.constant_affine_point(rando.clone());
+        let mut result = self.constant_affine_point(init.clone());
         let zero = self.zero();
         for i in (0..windows.len()).rev() {
             result = self.curve_double(&result);
@@ -408,13 +424,13 @@ impl<F: RichField + Extendable<D>, const D: usize> CircuitBuilderCurve<F, D>
             result = self.curve_double(&result);
 
             let window = windows[i];
-            let precomp = self.random_access_curve_points( window, precompute.clone());
+            let precomp = self.random_access_curve_points(window, precompute.clone());
             let is_zero = self.is_equal(window, zero);
             let should_add = self.not(is_zero);
-            result = self.curve_conditional_add(&result, &precomp , should_add);
+            result = self.curve_conditional_add(&result, &precomp, should_add);
         }
-        let randot_multiplied_point = self.constant_affine_point(randot_multiplied.clone());
-        let neg_r = self.curve_neg(&randot_multiplied_point);
+        let init_multiplied_point = self.constant_affine_point(init_multiplied.clone());
+        let neg_r = self.curve_neg(&init_multiplied_point);
         result = self.curve_add(&result, &neg_r);
         result
     }
@@ -448,16 +464,22 @@ impl<F: RichField + Extendable<D>, const D: usize> CircuitBuilderCurve<F, D>
         let r = 4;
         let d = 64;
         let precomp = self.precompute_comb_array();
-        let rando = (CurveScalar(C::ScalarField::rand()) * C::GENERATOR_PROJECTIVE).to_affine();
-        let randot = self.constant_affine_point(rando.clone());
+        let big_one = <C as Curve>::ScalarField::from_noncanonical_biguint(
+            BigUint::from_str(
+                "1",
+            )
+            .unwrap(),
+        );
+        let init = (CurveScalar(big_one) * C::GENERATOR_PROJECTIVE).to_affine();
+        let init_target = self.constant_affine_point(init.clone());
         let mut result = self.add_virtual_affine_point_target();
-        self.connect_affine_point(&randot, &result);
+        self.connect_affine_point(&init_target, &result);
         let col_0 = self.le_sum(n[0..(r*d)].iter().step_by(d).rev());
 
         let val_0 = self.random_access_curve_points(col_0, precomp.clone());
-        
+
         result = self.curve_add(&result, &val_0);
-        let to_add = self.constant_affine_point(-rando);
+        let to_add = self.constant_affine_point(-init);
         result = self.curve_add(&result, &to_add);
         let zero = self.zero();
         for i in (0..d-1).rev() {
@@ -494,13 +516,13 @@ impl<F: RichField + Extendable<D>, const D: usize, C: Curve> SimpleGenerator<F, 
         let mut bytes: [u8; 32] = [0; 32];
         for (byte_idx, chunk) in bits.chunks(8).enumerate() {
             let mut byte = 0u8;
-    
+
             for (bit_idx, &bit) in chunk.iter().enumerate() {
                 if bit {
                     byte |= 1 << (7 - bit_idx);
                 }
             }
-    
+
             bytes[31 - byte_idx] = byte;
         }
         let decompressed_point = point_decompress(bytes.as_slice());
@@ -536,11 +558,11 @@ mod tests {
     use std::ops::Neg;
 
     use anyhow::Result;
-    use plonky2::iop::witness::PartialWitness;
+        use plonky2::iop::witness::PartialWitness;
     use plonky2::plonk::circuit_builder::CircuitBuilder;
     use plonky2::plonk::circuit_data::CircuitConfig;
     use plonky2::plonk::config::{GenericConfig, PoseidonGoldilocksConfig};
-    use plonky2::field::types::{Field, Sample};
+use plonky2::field::types::{Field, Sample};
 
     use crate::curve::curve_types::{AffinePoint, Curve, CurveScalar};
     use crate::curve::ed25519::Ed25519;

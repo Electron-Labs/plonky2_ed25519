@@ -21,7 +21,7 @@ pub struct EDDSATargets {
 
 fn bits_in_le(input_vec: Vec<BoolTarget>) -> Vec<BoolTarget> {
     let mut result = Vec::with_capacity(input_vec.len());
-    
+
     input_vec
         .chunks_exact(8)
         .for_each(|chunk| result.extend(chunk.iter().rev()));
@@ -35,7 +35,7 @@ pub fn biguint_to_bits_target<F: RichField + Extendable<D>, const D: usize, cons
     num: &BigUintTarget,
 ) -> Vec<BoolTarget> {
     let mut bool_vec = Vec::new();
-    
+
     let limb_indices: Vec<usize> = (0..num.num_limbs()).collect();
     for i in limb_indices.into_iter().rev() {
         let bits_in_limb = builder.split_le_base::<B>(num.get_limb(i).0, 32);
@@ -57,7 +57,7 @@ pub fn bits_to_biguint_target<F: RichField + Extendable<D>, const D: usize>(
         let summed_chunk = builder.le_sum(chunk.iter().clone().rev());
         limb_targets.push(U32Target(summed_chunk));
     }
-    
+
     BigUintTarget { limbs: limb_targets }
 }
 
