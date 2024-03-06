@@ -97,6 +97,30 @@ pub fn verify_using_preprocessed_sha_block<F: RichField + Extendable<D>, const D
     builder.connect_affine_point(&point_sb, &rhs);
 }
 
+pub fn verify_using_message_digest<F: RichField + Extendable<D>, const D: usize>(
+    builder: &mut CircuitBuilder<F, D>,
+    digest: &Vec<BoolTarget>,
+    pub_key: &Vec<BoolTarget>,
+    sig: &Vec<BoolTarget>,
+) {
+    let digest_bits_le = bits_in_le(digest.clone());
+    let digest_biguint = bits_to_biguint_target(builder, digest_bits_le);
+    let h_scalar = builder.reduce::<Ed25519Scalar>(&digest_biguint);
+    let s_sig_bits_le = bits_in_le(sig[256..512].to_vec());
+    let pk_bits_le = bits_in_le(pub_key.clone());
+    let point_a = builder.point_decompress::<Ed25519>(&pk_bits_le);
+    let point_ha = builder.curve_scalar_mul_windowed(&point_a, &h_scalar);
+    let r_bits_le = bits_in_le(sig[..256].to_vec());
+    let point_r = builder.point_decompress(&r_bits_le);
+    let generator_target = builder.constant_affine_point(Ed25519::GENERATOR_AFFINE);
+    let s_sig_biguint = bits_to_biguint_target(builder, s_sig_bits_le);
+    let s_sig_nonNative = builder.biguint_to_nonnative(&s_sig_biguint);
+    let point_sb = builder.curve_scalar_mul_windowed(&generator_target, &s_sig_nonNative);
+    let rhs = builder.curve_add(&point_r, &point_ha);
+
+    builder.connect_affine_point(&point_sb, &rhs);
+}
+
 pub fn make_verify_circuits<F: RichField + Extendable<D>, const D: usize>(
     builder: &mut CircuitBuilder<F, D>,
     msg_len: usize,
