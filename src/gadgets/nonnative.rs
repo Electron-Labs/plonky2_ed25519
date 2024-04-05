@@ -24,7 +24,7 @@ use plonky2_crypto::biguint::{
 #[derive(Clone, Debug, Default)]
 pub struct NonNativeTarget<FF: Field> {
     pub value: BigUintTarget,
-    pub(crate) _phantom: PhantomData<FF>,
+    pub _phantom: PhantomData<FF>,
 }
 
 pub trait CircuitBuilderNonNative<F: RichField + Extendable<D>, const D: usize> {
